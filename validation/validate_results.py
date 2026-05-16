@@ -5,9 +5,17 @@ import pandas as pd
 
 DATASET_PATH = Path("dataset/cloud_logs.csv")
 
-REQUEST_COUNT_OUTPUT = Path("outputs/local_simulation/request_count_by_service.txt")
-SERVER_ERROR_OUTPUT = Path("outputs/local_simulation/server_error_count_by_service.txt")
-SLOW_ENDPOINT_OUTPUT = Path("outputs/local_simulation/top10_slow_endpoints.txt")
+# Local simulation outputs
+LOCAL_REQUEST_COUNT_OUTPUT = Path("outputs/local_simulation/request_count_by_service.txt")
+LOCAL_SERVER_ERROR_OUTPUT = Path("outputs/local_simulation/server_error_count_by_service.txt")
+LOCAL_SLOW_ENDPOINT_OUTPUT = Path("outputs/local_simulation/top10_slow_endpoints.txt")
+
+# Hadoop Streaming outputs
+HADOOP_REQUEST_COUNT_OUTPUT = Path("outputs/hadoop_streaming/request_count_output.txt")
+HADOOP_SERVER_ERROR_OUTPUT = Path("outputs/hadoop_streaming/server_error_output.txt")
+HADOOP_SLOW_ENDPOINT_OUTPUT = Path("outputs/hadoop_streaming/slow_endpoints_output.txt")
+
+# Ray output
 RAY_OUTPUT = Path("outputs/ray/degraded_services.txt")
 
 
@@ -21,9 +29,9 @@ def read_text_lines_with_fallback(path):
     """
     Read text lines with encoding fallback.
 
-    Some Windows PowerShell output files may be saved as UTF-16 LE when using '>'.
-    This helper allows the validation script to read UTF-8, UTF-8 with BOM,
-    UTF-16, and UTF-16 LE files.
+    Windows PowerShell may save redirected output as UTF-16 LE.
+    Hadoop output or Python output may be UTF-8.
+    This function supports common encodings used in this project.
     """
     encodings = ["utf-8", "utf-8-sig", "utf-16", "utf-16-le"]
 
@@ -47,8 +55,8 @@ def read_text_lines_with_fallback(path):
 
 def read_key_value_output(path):
     """
-    Read MapReduce output in the format:
-    key<TAB>value
+    Read output in the format:
+        key<TAB>value
 
     Returns:
         dict[str, int]
@@ -77,8 +85,8 @@ def read_key_value_output(path):
 
 def read_ray_output(path):
     """
-    Read Ray output in the format:
-    service_name,reason
+    Read Ray degraded-service output in the format:
+        service_name,reason
 
     Returns:
         dict[str, str]
@@ -107,7 +115,7 @@ def read_ray_output(path):
 
 def calculate_request_count(df):
     """
-    Calculate request count by service directly from the dataset.
+    Calculate request count by service directly from the original dataset.
     """
     counts = df["service_name"].value_counts().sort_index()
     return counts.astype(int).to_dict()
@@ -115,8 +123,7 @@ def calculate_request_count(df):
 
 def calculate_server_error_count(df):
     """
-    Calculate server error count by service directly from the dataset.
-
+    Calculate server error count by service directly from the original dataset.
     Server errors are records where status_code >= 500.
     """
     server_error_df = df[df["status_code"] >= 500]
@@ -126,7 +133,7 @@ def calculate_server_error_count(df):
 
 def calculate_top10_slow_endpoints(df):
     """
-    Calculate top 10 slow endpoints directly from the dataset.
+    Calculate top 10 slow endpoints directly from the original dataset.
 
     Slow request condition:
         response_time_ms > 800
@@ -145,7 +152,7 @@ def calculate_top10_slow_endpoints(df):
 
 def calculate_degraded_services(df):
     """
-    Calculate degraded services directly from the dataset.
+    Calculate degraded services directly from the original dataset.
 
     A service is considered degraded if at least one condition is satisfied:
     - slow request rate > 20%
@@ -196,14 +203,14 @@ def compare_dicts(name, expected, actual):
     """
     Compare two dictionaries and print validation result.
     """
-    print("=" * 80)
+    print("=" * 90)
     print(f"Validation: {name}")
-    print("=" * 80)
+    print("=" * 90)
 
     if expected == actual:
-        print("PASS: output matches direct pandas calculation.")
+        print("PASS: output matches expected result.")
     else:
-        print("FAIL: output does not match direct pandas calculation.")
+        print("FAIL: output does not match expected result.")
 
         expected_keys = set(expected.keys())
         actual_keys = set(actual.keys())
@@ -213,16 +220,104 @@ def compare_dicts(name, expected, actual):
         common_keys = expected_keys & actual_keys
 
         if missing_keys:
-            print(f"Missing keys in output: {sorted(missing_keys)}")
+            print(f"Missing keys in actual output: {sorted(missing_keys)}")
 
         if extra_keys:
-            print(f"Extra keys in output: {sorted(extra_keys)}")
+            print(f"Extra keys in actual output: {sorted(extra_keys)}")
 
         for key in sorted(common_keys):
             if expected[key] != actual[key]:
                 print(
                     f"Mismatch for {key}: "
                     f"expected={expected[key]}, actual={actual[key]}"
+                )
+
+    print()
+
+
+def compare_optional_hadoop_output(name, expected, hadoop_path):
+    """
+    Compare Hadoop output with expected result only if the Hadoop output file exists.
+
+    This allows the validation script to run even while Hadoop Docker work is still in progress.
+    """
+    print("=" * 90)
+    print(f"Hadoop validation availability check: {name}")
+    print("=" * 90)
+
+    if not hadoop_path.exists():
+        print(f"SKIPPED: Hadoop output not found yet: {hadoop_path}")
+        print("This is acceptable if Hadoop Docker / Hadoop Streaming is still being prepared.")
+        print()
+        return None
+
+    actual_hadoop = read_key_value_output(hadoop_path)
+
+    if expected == actual_hadoop:
+        print("PASS: Hadoop Streaming output matches pandas calculation.")
+    else:
+        print("FAIL: Hadoop Streaming output does not match pandas calculation.")
+
+        expected_keys = set(expected.keys())
+        actual_keys = set(actual_hadoop.keys())
+
+        missing_keys = expected_keys - actual_keys
+        extra_keys = actual_keys - expected_keys
+        common_keys = expected_keys & actual_keys
+
+        if missing_keys:
+            print(f"Missing keys in Hadoop output: {sorted(missing_keys)}")
+
+        if extra_keys:
+            print(f"Extra keys in Hadoop output: {sorted(extra_keys)}")
+
+        for key in sorted(common_keys):
+            if expected[key] != actual_hadoop[key]:
+                print(
+                    f"Mismatch for {key}: "
+                    f"expected={expected[key]}, hadoop={actual_hadoop[key]}"
+                )
+
+    print()
+    return actual_hadoop
+
+
+def compare_local_and_hadoop(name, local_result, hadoop_result):
+    """
+    Compare local simulation output and Hadoop Streaming output.
+    """
+    print("=" * 90)
+    print(f"Local vs Hadoop comparison: {name}")
+    print("=" * 90)
+
+    if hadoop_result is None:
+        print("SKIPPED: Hadoop output is not available yet.")
+        print()
+        return
+
+    if local_result == hadoop_result:
+        print("PASS: local simulation output matches Hadoop Streaming output.")
+    else:
+        print("FAIL: local simulation output does not match Hadoop Streaming output.")
+
+        local_keys = set(local_result.keys())
+        hadoop_keys = set(hadoop_result.keys())
+
+        missing_keys = local_keys - hadoop_keys
+        extra_keys = hadoop_keys - local_keys
+        common_keys = local_keys & hadoop_keys
+
+        if missing_keys:
+            print(f"Keys missing in Hadoop output: {sorted(missing_keys)}")
+
+        if extra_keys:
+            print(f"Extra keys in Hadoop output: {sorted(extra_keys)}")
+
+        for key in sorted(common_keys):
+            if local_result[key] != hadoop_result[key]:
+                print(
+                    f"Mismatch for {key}: "
+                    f"local={local_result[key]}, hadoop={hadoop_result[key]}"
                 )
 
     print()
@@ -252,9 +347,9 @@ def print_manual_validation_example(df):
     slow_rate = slow_requests / total_requests
     server_error_rate = server_errors / total_requests
 
-    print("=" * 80)
+    print("=" * 90)
     print("Concrete validation example for report")
-    print("=" * 80)
+    print("=" * 90)
     print(f"Checked service: {service_name}")
     print(f"total_requests = {total_requests}")
     print(f"slow_requests = {slow_requests}")
@@ -285,42 +380,85 @@ def main():
 
     df = pd.read_csv(DATASET_PATH)
 
+    # Expected results calculated directly from the original dataset.
     expected_request_count = calculate_request_count(df)
-    actual_request_count = read_key_value_output(REQUEST_COUNT_OUTPUT)
-
     expected_server_error_count = calculate_server_error_count(df)
-    actual_server_error_count = read_key_value_output(SERVER_ERROR_OUTPUT)
-
     expected_top10_slow_endpoints = calculate_top10_slow_endpoints(df)
-    actual_top10_slow_endpoints = read_key_value_output(SLOW_ENDPOINT_OUTPUT)
-
     expected_degraded_services = calculate_degraded_services(df)
+
+    # Local simulation outputs.
+    local_request_count = read_key_value_output(LOCAL_REQUEST_COUNT_OUTPUT)
+    local_server_error_count = read_key_value_output(LOCAL_SERVER_ERROR_OUTPUT)
+    local_top10_slow_endpoints = read_key_value_output(LOCAL_SLOW_ENDPOINT_OUTPUT)
+
+    # Ray output.
     actual_degraded_services = read_ray_output(RAY_OUTPUT)
 
+    # A. Validate local simulation outputs against pandas.
     compare_dicts(
-        "MapReduce Output 1 - Request Count by Service",
+        "Local Simulation - Request Count by Service",
         expected_request_count,
-        actual_request_count
+        local_request_count
     )
 
     compare_dicts(
-        "MapReduce Output 2 - Server Error Count by Service",
+        "Local Simulation - Server Error Count by Service",
         expected_server_error_count,
-        actual_server_error_count
+        local_server_error_count
     )
 
     compare_dicts(
-        "MapReduce Output 3 - Top 10 Slow Endpoints",
+        "Local Simulation - Top 10 Slow Endpoints",
         expected_top10_slow_endpoints,
-        actual_top10_slow_endpoints
+        local_top10_slow_endpoints
     )
 
+    # B. Validate Hadoop Streaming outputs against pandas, if available.
+    hadoop_request_count = compare_optional_hadoop_output(
+        "Hadoop Streaming - Request Count by Service",
+        expected_request_count,
+        HADOOP_REQUEST_COUNT_OUTPUT
+    )
+
+    hadoop_server_error_count = compare_optional_hadoop_output(
+        "Hadoop Streaming - Server Error Count by Service",
+        expected_server_error_count,
+        HADOOP_SERVER_ERROR_OUTPUT
+    )
+
+    hadoop_top10_slow_endpoints = compare_optional_hadoop_output(
+        "Hadoop Streaming - Top 10 Slow Endpoints",
+        expected_top10_slow_endpoints,
+        HADOOP_SLOW_ENDPOINT_OUTPUT
+    )
+
+    # C. Compare local simulation outputs with Hadoop Streaming outputs.
+    compare_local_and_hadoop(
+        "Request Count by Service",
+        local_request_count,
+        hadoop_request_count
+    )
+
+    compare_local_and_hadoop(
+        "Server Error Count by Service",
+        local_server_error_count,
+        hadoop_server_error_count
+    )
+
+    compare_local_and_hadoop(
+        "Top 10 Slow Endpoints",
+        local_top10_slow_endpoints,
+        hadoop_top10_slow_endpoints
+    )
+
+    # D. Validate Ray output against pandas.
     compare_dicts(
         "Ray Output - Degraded Service Detection",
         expected_degraded_services,
         actual_degraded_services
     )
 
+    # E. Print one concrete example for the report.
     print_manual_validation_example(df)
 
 
