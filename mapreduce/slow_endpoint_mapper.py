@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 import csv
 
@@ -34,8 +35,8 @@ def main():
             continue
 
         if response_time_ms > 800 and service_name and endpoint:
-            key = f"{service_name},{endpoint}"
-            print(f"{key}\t1")
+            key = "{},{}".format(service_name, endpoint)
+            print("{}\t1".format(key))
 
 
 if __name__ == "__main__":

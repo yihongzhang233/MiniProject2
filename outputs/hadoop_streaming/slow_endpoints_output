@@ -1,0 +1,10 @@
+search-service,/search/results  1174
+search-service,/search/filter   1165
+search-service,/search  1123
+search-service,/search/autocomplete     1119
+payment-service,/payments       577
+payment-service,/payments/refund        526
+payment-service,/payments/status        525
+payment-service,/payments/confirm       506
+order-service,/orders   256
+order-service,/orders/history   229

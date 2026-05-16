@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 
 
@@ -44,7 +45,7 @@ def main():
 
     # Output top 10
     for endpoint_key, count in results[:10]:
-        print(f"{endpoint_key}\t{count}")
+        print("{}\t{}".format(endpoint_key, count))
 
 
 if __name__ == "__main__":

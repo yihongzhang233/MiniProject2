@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 
 
@@ -6,7 +7,7 @@ def emit_result(service_name, count):
     Print final aggregated result.
     """
     if service_name is not None:
-        print(f"{service_name}\t{count}")
+        print("{}\t{}".format(service_name, count))
 
 
 def main():

@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 import csv
 
@@ -26,7 +27,7 @@ def main():
         service_name = row[3].strip()
 
         if service_name:
-            print(f"{service_name}\t1")
+            print("{}\t1".format(service_name))
 
 
 if __name__ == "__main__":
